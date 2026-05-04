@@ -1627,8 +1627,9 @@ function update(g: GS, dt: number) {
         // If the player had a combo multiplier built up, the tackle breaks it.
         if (g.multiplier > 1) audioManager.playComboBreak()
         // Stop the boost engine loop if it was running so it doesn't
-        // bleed into the game-over screen.
+        // bleed into the game-over screen. Also stop crowd noise.
         audioManager.stopBoostLoop()
+        audioManager.stopCrowd()
         _sfxPrevBoostActive = false
         // Trigger the tackling defender's tackle animation. Snap it onto
         // the player's position so the 7-frame sequence reads as the
@@ -1845,6 +1846,15 @@ function update(g: GS, dt: number) {
   }
   _sfxLastMilestoneGrp = curMilestoneGrp
 
+  // ── Crowd intensity ─────────────────────────────────────────────────────
+  // Drive excitement from the combo multiplier (0 at x1, full at x8) and
+  // spike roar on touchdown / big-play screen-flash moments.
+  if (audioManager.isContextRunning()) {
+    const excitement = Math.max(0, (g.multiplier - 1) / 7)
+    const roar = g.screenFlash > 0.6 ? g.screenFlash : 0
+    audioManager.setCrowdIntensity(excitement, roar)
+  }
+
   updateParticles(g, cdt)
   updateFloatTexts(g, cdt)
 }
@@ -2045,12 +2055,60 @@ function drawFan(ctx: CanvasRenderingContext2D, fan: Fan, bobY: number, armUp: b
 
 // `active` — true during gameplay phases; freezes animation on pause/gameover.
 function drawSidelines(ctx: CanvasRenderingContext2D, time: number, active: boolean) {
-  // Left crowd (home: Alcorn purple/gold)
-  ctx.fillStyle = '#1a0a2e'
+  // ── Night-sky backdrop ────────────────────────────────────────────────────
+  const skyGrd = ctx.createLinearGradient(0, 0, 0, GH)
+  skyGrd.addColorStop(0,   '#03010a')
+  skyGrd.addColorStop(0.4, '#0a0520')
+  skyGrd.addColorStop(1,   '#140b2e')
+  ctx.fillStyle = skyGrd
+  ctx.fillRect(0, 0, GW, GH)
+
+  // ── Star-field ────────────────────────────────────────────────────────────
+  ctx.save()
+  for (let i = 0; i < 80; i++) {
+    const sx = ((i * 137.508 + 11) % 1) * GW
+    const sy = ((i * 97.3 + 7)    % 1) * (GH * 0.55)
+    const sr = 0.5 + ((i * 53) % 10) * 0.12
+    const twinkle = 0.6 + 0.4 * Math.sin(time * 1.2 + i * 0.9)
+    ctx.globalAlpha = 0.35 * twinkle
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath(); ctx.arc(sx, sy, sr, 0, Math.PI * 2); ctx.fill()
+  }
+  ctx.globalAlpha = 1
+  ctx.restore()
+
+  // ── Floodlight halos ──────────────────────────────────────────────────────
+  const floodAlpha = 0.13 + 0.04 * Math.sin(time * 0.7)
+  const towers = [
+    { x: FL * 0.15,         y: GH * 0.08 },
+    { x: FL * 0.75,         y: GH * 0.04 },
+    { x: FR + (GW-FR)*0.25, y: GH * 0.04 },
+    { x: FR + (GW-FR)*0.85, y: GH * 0.08 },
+  ]
+  for (const t of towers) {
+    const halo = ctx.createRadialGradient(t.x, t.y, 2, t.x, t.y, 160)
+    halo.addColorStop(0,   `rgba(255,252,210,${floodAlpha * 3.5})`)
+    halo.addColorStop(0.3, `rgba(255,245,180,${floodAlpha})`)
+    halo.addColorStop(1,   'rgba(0,0,0,0)')
+    ctx.fillStyle = halo
+    ctx.fillRect(t.x - 160, t.y - 20, 320, 220)
+    ctx.save()
+    ctx.globalAlpha = 0.65 + 0.3 * Math.sin(time * 1.1 + t.x)
+    ctx.fillStyle = '#fffde8'
+    ctx.beginPath(); ctx.arc(t.x, t.y, 3, 0, Math.PI * 2); ctx.fill()
+    ctx.restore()
+  }
+
+  // ── Left sideline ─────────────────────────────────────────────────────────
+  const lgrd = ctx.createLinearGradient(0, 0, FL, 0)
+  lgrd.addColorStop(0,   '#08031a')
+  lgrd.addColorStop(0.6, '#150830')
+  lgrd.addColorStop(1,   '#1f0e3c')
+  ctx.fillStyle = lgrd
   ctx.fillRect(0, 0, FL, GH)
   ctx.save()
   ctx.beginPath(); ctx.rect(0, 0, FL, GH); ctx.clip()
-  ctx.globalAlpha = 0.8
+  ctx.globalAlpha = 0.82
   for (const d of CROWD_L) {
     const bobY  = active ? Math.sin(time * 4.5 + d.phase) * 3 : 0
     const armUp = active && Math.sin(time * 3.0 + d.phase) > 0.3
@@ -2058,12 +2116,16 @@ function drawSidelines(ctx: CanvasRenderingContext2D, time: number, active: bool
   }
   ctx.restore()
 
-  // Right crowd (away: HBCU schools aggregate palette)
-  ctx.fillStyle = '#0d0d1a'
+  // ── Right sideline ────────────────────────────────────────────────────────
+  const rgrd = ctx.createLinearGradient(FR, 0, GW, 0)
+  rgrd.addColorStop(0,   '#110616')
+  rgrd.addColorStop(0.4, '#0c0415')
+  rgrd.addColorStop(1,   '#050108')
+  ctx.fillStyle = rgrd
   ctx.fillRect(FR, 0, GW - FR, GH)
   ctx.save()
   ctx.beginPath(); ctx.rect(FR, 0, GW - FR, GH); ctx.clip()
-  ctx.globalAlpha = 0.8
+  ctx.globalAlpha = 0.82
   for (const d of CROWD_R) {
     const bobY  = active ? Math.sin(time * 4.5 + d.phase) * 3 : 0
     const armUp = active && Math.sin(time * 3.0 + d.phase) > 0.3
@@ -2072,22 +2134,44 @@ function drawSidelines(ctx: CanvasRenderingContext2D, time: number, active: bool
   ctx.restore()
   ctx.globalAlpha = 1
 
-  // Sideline labels — only fit when the sideline strip is wide enough
-  // (desktop). In mobile portrait the strip is intentionally thin so the
-  // field can use the full device width.
+  // ── Sideline-edge field glow ──────────────────────────────────────────────
+  const edgeW = Math.min(FL, 28)
+  const leftEdge = ctx.createLinearGradient(FL - edgeW, 0, FL, 0)
+  leftEdge.addColorStop(0, 'rgba(0,0,0,0)')
+  leftEdge.addColorStop(1, 'rgba(160,220,140,0.07)')
+  ctx.fillStyle = leftEdge
+  ctx.fillRect(FL - edgeW, 0, edgeW, GH)
+  const rightEdge = ctx.createLinearGradient(FR, 0, FR + edgeW, 0)
+  rightEdge.addColorStop(0, 'rgba(160,220,140,0.07)')
+  rightEdge.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = rightEdge
+  ctx.fillRect(FR, 0, edgeW, GH)
+
+  // ── Top scoreboard glow strip ─────────────────────────────────────────────
+  const scoreboardGrd = ctx.createLinearGradient(0, 0, 0, 30)
+  scoreboardGrd.addColorStop(0, 'rgba(75,0,130,0.18)')
+  scoreboardGrd.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = scoreboardGrd
+  ctx.fillRect(0, 0, GW, 30)
+
+  // ── Sideline labels ───────────────────────────────────────────────────────
   if (FL >= 80) {
     ctx.save()
     ctx.translate(FL / 2, GH / 2)
     ctx.rotate(-Math.PI / 2)
+    ctx.shadowColor = C_GOLD; ctx.shadowBlur = 8
     ctx.fillStyle = C_GOLD; ctx.font = 'bold 14px Impact'; ctx.textAlign = 'center'
     ctx.fillText('ALCORN STATE', 0, 0)
+    ctx.shadowBlur = 0
     ctx.restore()
 
     ctx.save()
     ctx.translate(FR + (GW - FR) / 2, GH / 2)
     ctx.rotate(Math.PI / 2)
+    ctx.shadowColor = '#C9A227'; ctx.shadowBlur = 8
     ctx.fillStyle = '#C9A227'; ctx.font = 'bold 14px Impact'; ctx.textAlign = 'center'
     ctx.fillText('VISITORS', 0, 0)
+    ctx.shadowBlur = 0
     ctx.restore()
   }
 }
@@ -2118,12 +2202,31 @@ function drawField(ctx: CanvasRenderingContext2D, worldOffset: number, touchdown
     }
   }
 
-  // Subtle field center lighting
-  const fgrd = ctx.createRadialGradient(GW/2, GH/2, 0, GW/2, GH/2, 600)
-  fgrd.addColorStop(0, 'rgba(255,255,220,0.07)')
-  fgrd.addColorStop(1, 'rgba(0,0,0,0.06)')
+  // Floodlight cones from tower positions (established in drawSidelines)
+  const floodCones = [
+    { ox: FL + FW * 0.18, spread: FW * 0.55 },
+    { ox: FL + FW * 0.82, spread: FW * 0.55 },
+  ]
+  for (const fc of floodCones) {
+    const coneGrd = ctx.createRadialGradient(fc.ox, 0, 0, fc.ox, GH * 0.5, fc.spread)
+    coneGrd.addColorStop(0,   'rgba(255,250,220,0.11)')
+    coneGrd.addColorStop(0.5, 'rgba(255,240,180,0.05)')
+    coneGrd.addColorStop(1,   'rgba(0,0,0,0)')
+    ctx.fillStyle = coneGrd
+    ctx.fillRect(FL, 0, FW, GH)
+  }
+  // Field ambient — subtle blue-tinted ambient from the open sky
+  const fgrd = ctx.createRadialGradient(GW/2, GH * 0.4, 0, GW/2, GH * 0.4, GH * 0.7)
+  fgrd.addColorStop(0, 'rgba(200,220,255,0.06)')
+  fgrd.addColorStop(1, 'rgba(0,0,0,0.04)')
   ctx.fillStyle = fgrd
   ctx.fillRect(FL, 0, FW, GH)
+  // Near-edge vignette — darkens the field near the viewer (bottom) for depth
+  const vigGrd = ctx.createLinearGradient(0, GH * 0.7, 0, GH)
+  vigGrd.addColorStop(0, 'rgba(0,0,0,0)')
+  vigGrd.addColorStop(1, 'rgba(0,0,0,0.18)')
+  ctx.fillStyle = vigGrd
+  ctx.fillRect(FL, GH * 0.7, FW, GH * 0.3)
 
   // Yard lines — drawn at absolute world Y positions and projected onto screen.
   // A yard line at world Y = W appears at: screenY = PLAYER_Y + worldOffset - W.
@@ -2457,20 +2560,38 @@ function drawDefenderSprite(
   const cx = Math.round(d.x)
   const cy = Math.round(d.screenY)
 
-  // Soft shadow on the field.
-  ctx.fillStyle = 'rgba(0,0,0,0.34)'
+  // Depth-perspective scaling — defenders far up field (near DEF_SPAWN_SCREEN_Y)
+  // appear smaller; defenders near the player (PLAYER_Y) appear full size.
+  const journey   = Math.max(1, PLAYER_Y - DEF_SPAWN_SCREEN_Y)
+  const depthT    = Math.max(0, Math.min(1, (cy - DEF_SPAWN_SCREEN_Y) / journey))
+  const depthScale = 0.52 + depthT * 0.48
+  const dw = Math.round(DEFENDER_DRAW_W * depthScale)
+  const dh = Math.round(DEFENDER_DRAW_H * depthScale)
+
+  // Dual-ellipse shadow: primary soft blob + narrow contact shadow, both
+  // scale with depthT so far defenders cast fainter, tighter shadows.
+  const shadowOpacity = 0.18 + depthT * 0.28
+  ctx.fillStyle = `rgba(0,0,0,${shadowOpacity.toFixed(2)})`
   ctx.beginPath()
   ctx.ellipse(
-    cx + 3, cy + DEFENDER_DRAW_H * 0.30,
-    DEFENDER_DRAW_W * 0.32, DEFENDER_DRAW_W * 0.13,
+    cx + 3, cy + dh * 0.30,
+    dw * 0.38, dw * 0.14,
+    0, 0, Math.PI * 2,
+  )
+  ctx.fill()
+  // Contact shadow (tighter, darker)
+  ctx.fillStyle = `rgba(0,0,0,${(shadowOpacity * 0.6).toFixed(2)})`
+  ctx.beginPath()
+  ctx.ellipse(
+    cx + 1, cy + dh * 0.32,
+    dw * 0.22, dw * 0.07,
     0, 0, Math.PI * 2,
   )
   ctx.fill()
 
   if (!defenderSpritesReady()) {
-    // Fallback dot until sprites finish loading (sub-second on local).
     ctx.fillStyle = '#1A3A8A'
-    ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(cx, cy, 14 * depthScale, 0, Math.PI * 2); ctx.fill()
     return
   }
 
@@ -2478,29 +2599,37 @@ function drawDefenderSprite(
   const img = pickDefenderFrame(d.variant, state, d.runCycle, d.tackleElapsed)
   if (!img) return
 
-  const dx = -Math.round(DEFENDER_DRAW_W / 2)
-  const dy = -Math.round(DEFENDER_DRAW_H / 2)
+  const dx = -Math.round(dw / 2)
+  const dy = -Math.round(dh / 2)
 
   ctx.save()
   ctx.translate(cx, cy)
-  ctx.drawImage(img, dx, dy, DEFENDER_DRAW_W, DEFENDER_DRAW_H)
 
-  // Hit-flash tint: reuse the previous procedural flash logic by stamping a
-  // red multiply over the sprite proportional to flashAmt.
+  // Depth fog: far defenders get a dark overlay to simulate atmospheric perspective
+  // Apply it below the sprite (globalCompositeOperation default) as a pre-tint.
+  const fogAmt = (1 - depthT) * 0.38
+  if (fogAmt > 0.02) {
+    ctx.globalAlpha = fogAmt
+    ctx.fillStyle = '#101820'
+    ctx.fillRect(dx - 2, dy - 2, dw + 4, dh + 4)
+    ctx.globalAlpha = 1
+  }
+
+  ctx.drawImage(img, dx, dy, dw, dh)
+
+  // Hit-flash tint
   if (flashAmt > 0) {
     ctx.globalCompositeOperation = 'source-atop'
     ctx.globalAlpha = Math.min(0.55, flashAmt * 0.55)
     ctx.fillStyle = '#ff2222'
-    ctx.fillRect(dx, dy, DEFENDER_DRAW_W, DEFENDER_DRAW_H)
+    ctx.fillRect(dx, dy, dw, dh)
   }
-  // Brief white impact flash on tackle contact — 3-5 frame pop that reads
-  // as the moment of impact. Stamped on top with source-atop so it only
-  // affects the sprite pixels (not the shadow or background).
+  // White impact flash on tackle contact
   if (hitFlashAmt > 0) {
     ctx.globalCompositeOperation = 'source-atop'
     ctx.globalAlpha = Math.min(0.9, hitFlashAmt * 0.9)
     ctx.fillStyle = '#ffffff'
-    ctx.fillRect(dx, dy, DEFENDER_DRAW_W, DEFENDER_DRAW_H)
+    ctx.fillRect(dx, dy, dw, dh)
   }
   ctx.restore()
 }
@@ -2629,6 +2758,88 @@ function drawCollectible(ctx: CanvasRenderingContext2D, c: Collectible, time: nu
 }
 
 // ─── Particles ────────────────────────────────────────────────────────────────
+// ── Speed Visual Effects ──────────────────────────────────────────────────────
+// Renders boost ghost afterimages, directional speed lines, and a chromatic
+// aberration edge flash at high screenFlash. Inserted in the render pipeline
+// just after drawPlayerSprite so it composites on top of the player but under
+// HUD elements.
+function drawSpeedEffects(ctx: CanvasRenderingContext2D, g: GS, time: number) {
+  const px = Math.round(g.playerX)
+  const py = PLAYER_Y
+
+  // ── Boost ghost afterimage ──────────────────────────────────────────
+  // Three translucent ellipses trailing behind the player when boosting.
+  // Gold when boost-active, purple when spin-active, white otherwise (speed).
+  const isBoost = g.boostLoop > 0
+  const isSpin  = (g as any).spinActive > 0   // spinActive may not exist, safe cast
+  const hasEffect = isBoost || isSpin || g.screenFlash > 0.08
+  if (hasEffect && (isBoost || isSpin)) {
+    const ghostColor = isBoost
+      ? 'rgba(255,200,0,'
+      : 'rgba(160,60,255,'
+    for (let i = 0; i < 3; i++) {
+      const trailY = py + 18 + i * 14
+      const alpha  = (0.22 - i * 0.06) * (isBoost ? 1 : 0.75)
+      ctx.save()
+      ctx.globalAlpha = alpha
+      ctx.fillStyle = ghostColor + '1)'
+      ctx.beginPath()
+      ctx.ellipse(px, trailY, 18 - i * 3, 9 - i * 2, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+  }
+
+  // ── Directional speed lines ─────────────────────────────────────────
+  // Upward streaks that intensify with speed. Color: gold=boost, purple=spin,
+  // white=general speed. Length and count scale with screenFlash / boost state.
+  const lineIntensity = isBoost ? 1.0 : (isSpin ? 0.75 : Math.min(g.screenFlash * 1.5, 0.5))
+  if (lineIntensity > 0.05) {
+    const lineCount  = Math.round(6 + lineIntensity * 10)
+    const lineColor  = isBoost ? '#FFD700' : isSpin ? '#B44CFF' : '#FFFFFF'
+    const maxLength  = 40 + lineIntensity * 60
+    ctx.save()
+    ctx.globalAlpha = lineIntensity * 0.55
+    ctx.strokeStyle = lineColor
+    for (let i = 0; i < lineCount; i++) {
+      // Deterministic but varied per-frame via time offset
+      const phase   = (i / lineCount) * Math.PI * 2 + time * (2 + i * 0.3)
+      const lx      = px + Math.sin(phase) * 38 + Math.cos(phase * 0.5) * 22
+      const ly      = py - 10 - Math.abs(Math.sin(phase * 1.3)) * 30
+      const len     = maxLength * (0.4 + 0.6 * Math.abs(Math.sin(phase * 0.7)))
+      const alpha01 = 0.3 + 0.7 * Math.abs(Math.sin(phase * 1.1))
+      ctx.globalAlpha = lineIntensity * alpha01 * 0.5
+      ctx.lineWidth   = 1 + lineIntensity * 1.5
+      ctx.beginPath()
+      ctx.moveTo(lx, ly)
+      ctx.lineTo(lx + Math.sin(phase * 0.2) * 4, ly - len)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  // ── Chromatic aberration edge flash ─────────────────────────────────
+  // At high screenFlash (impacts, touchdowns) paint thin R/G/B offset
+  // strips around the player to simulate camera shake / impact bloom.
+  if (g.screenFlash > 0.55) {
+    const ca = (g.screenFlash - 0.55) / 0.45   // 0–1 above threshold
+    const offset = Math.round(ca * 5)
+    ctx.save()
+    ctx.globalAlpha = ca * 0.45
+    // Red channel shift left
+    ctx.fillStyle = 'rgba(255,0,0,1)'
+    ctx.beginPath()
+    ctx.ellipse(px - offset, py - 5, 26, 12, 0, 0, Math.PI * 2)
+    ctx.fill()
+    // Cyan channel shift right
+    ctx.fillStyle = 'rgba(0,255,255,1)'
+    ctx.beginPath()
+    ctx.ellipse(px + offset, py - 5, 26, 12, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+}
+
 function drawParticles(ctx: CanvasRenderingContext2D, g: GS) {
   for (const p of g.particles) {
     if (p.life <= 0) continue
@@ -2688,11 +2899,21 @@ function drawHUD(ctx: CanvasRenderingContext2D, g: GS, time: number) {
   // the current opponent's primary color so the matchup reads in the
   // HUD throughout the level.
   const oppMeta = SCHOOL_META[g.opponent]
+  // Score panel — pop scale + gold glow on screenFlash (TD, collect, milestone)
+  const scorePop   = g.screenFlash > 0.1 ? 1 + (g.screenFlash - 0.1) * 0.12 : 1
+  const scoreGlow  = g.screenFlash > 0.3 ? Math.min((g.screenFlash - 0.3) / 0.4, 1) : 0
+  ctx.save()
+  ctx.translate(12 + 120, topY + 60)
+  ctx.scale(scorePop, scorePop)
+  ctx.translate(-(12 + 120), -(topY + 60))
   ctx.fillStyle = 'rgba(0,0,0,0.5)'
   roundRect(ctx, 12, topY, 240, 120, 10); ctx.fill()
   ctx.fillStyle = C_GOLD
   ctx.font = 'bold 40px Impact'; ctx.textAlign = 'left'
+  if (scoreGlow > 0) { ctx.shadowColor = C_GOLD; ctx.shadowBlur = 18 * scoreGlow }
   ctx.fillText(g.score.toLocaleString(), 24, topY + 42)
+  ctx.shadowBlur = 0
+  ctx.restore()
   ctx.fillStyle = 'rgba(255,255,255,0.7)'
   ctx.font = '17px Impact'
   ctx.fillText(`${Math.floor(g.yards)} YDS  ·  TD: ${g.touchdowns}`, 24, topY + 66)
@@ -2862,16 +3083,93 @@ function drawHUD(ctx: CanvasRenderingContext2D, g: GS, time: number) {
     ctx.textAlign = 'left'
   }
 
-  // ── Multiplier (top center) ──────────────────────────────────────
+  // ── Combo Meter (top center) — tiered fire-glow display ───────────
+  // Tier thresholds: tier0=×1, tier1=×2, tier2=×4, tier3=×7+
+  // Each tier changes the fill color and adds progressively wilder glow.
   if (g.multiplier > 1) {
-    const pulse = 1 + Math.sin(time * 8) * 0.04
-    ctx.save(); ctx.translate(GW/2, topY + 16); ctx.scale(pulse, pulse)
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    roundRect(ctx, -70, -20, 140, 40, 8); ctx.fill()
-    ctx.fillStyle = C_GOLD; ctx.font = 'bold 26px Impact'; ctx.textAlign = 'center'
-    ctx.shadowColor = C_GOLD; ctx.shadowBlur = 12
-    ctx.fillText(`x${g.multiplier.toFixed(1)} MULTIPLIER`, 0, 12)
-    ctx.shadowBlur = 0; ctx.restore()
+    const mult = g.multiplier
+    const tier = mult >= 7 ? 3 : mult >= 4 ? 2 : mult >= 2 ? 1 : 0
+    const tierColors  = ['#FFD700', '#FF8C00', '#FF4500', '#FF1400']
+    const tierGlows   = [C_GOLD,    '#FF8C00', '#FF4500', '#FF1400']
+    const tierBlurs   = [12, 18, 26, 38]
+    const tierLabels  = ['COMBO', 'COMBO', 'ON FIRE', 'UNSTOPPABLE']
+    const barMaxMult  = [2, 4, 7, 12]   // upper end of each tier's fill bar
+    const barMinMult  = [1, 2, 4, 7]
+    const fillPct = tier < 3
+      ? Math.min((mult - barMinMult[tier]) / (barMaxMult[tier] - barMinMult[tier]), 1)
+      : Math.min((mult - 7) / 5, 1)
+    const pulse = 1 + Math.sin(time * (8 + tier * 3)) * (0.03 + tier * 0.015)
+    const comboW = isMobile ? 150 : 180
+    const comboH = isMobile ? 54 : 64
+
+    ctx.save()
+    ctx.translate(GW / 2, topY + (isMobile ? 30 : 34))
+    ctx.scale(pulse, pulse)
+    ctx.globalAlpha = 0.92
+
+    // Panel background
+    ctx.fillStyle = 'rgba(0,0,0,0.62)'
+    roundRect(ctx, -comboW/2, -comboH/2, comboW, comboH, 10)
+    ctx.fill()
+
+    // Panel border — glows with tier color
+    ctx.strokeStyle = tierColors[tier]
+    ctx.lineWidth = 2
+    ctx.shadowColor = tierGlows[tier]
+    ctx.shadowBlur = tierBlurs[tier] * 0.5
+    roundRect(ctx, -comboW/2, -comboH/2, comboW, comboH, 10)
+    ctx.stroke()
+    ctx.shadowBlur = 0
+
+    // Fill progress bar (bottom strip)
+    const barH = 7
+    const barY = comboH/2 - barH - 4
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'
+    roundRect(ctx, -comboW/2 + 6, barY, comboW - 12, barH, 3)
+    ctx.fill()
+    if (fillPct > 0) {
+      const barGrd = ctx.createLinearGradient(-comboW/2 + 6, 0, comboW/2 - 6, 0)
+      barGrd.addColorStop(0, tierColors[tier])
+      barGrd.addColorStop(1, tierGlows[tier])
+      ctx.fillStyle = barGrd
+      ctx.shadowColor = tierGlows[tier]
+      ctx.shadowBlur = 8
+      roundRect(ctx, -comboW/2 + 6, barY, Math.max(6, (comboW - 12) * fillPct), barH, 3)
+      ctx.fill()
+      ctx.shadowBlur = 0
+    }
+
+    // Fire sparks at tier >= 1
+    if (tier >= 1) {
+      const sparkCount = 4 + tier * 3
+      for (let i = 0; i < sparkCount; i++) {
+        const sp = (i / sparkCount) * Math.PI * 2 + time * (3 + tier)
+        const sx = Math.sin(sp) * (comboW * 0.44)
+        const sy = -comboH * 0.4 + Math.cos(sp * 1.3) * 4
+        const sr = 1.5 + Math.abs(Math.sin(sp * 2.1)) * (tier * 1.2)
+        ctx.globalAlpha = 0.55 + 0.45 * Math.abs(Math.sin(sp))
+        ctx.fillStyle = tierColors[tier]
+        ctx.shadowColor = tierGlows[tier]
+        ctx.shadowBlur = 6
+        ctx.beginPath()
+        ctx.arc(sx, sy, sr, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.shadowBlur = 0
+      }
+    }
+
+    // ×N.N COMBO label
+    ctx.globalAlpha = 0.95
+    ctx.textAlign = 'center'
+    ctx.fillStyle = tierColors[tier]
+    ctx.shadowColor = tierGlows[tier]
+    ctx.shadowBlur = tierBlurs[tier]
+    ctx.font = `bold ${isMobile ? 22 : 26}px Impact`
+    ctx.fillText(`×${mult.toFixed(1)} ${tierLabels[tier]}`, 0, isMobile ? 8 : 10)
+    ctx.shadowBlur = 0
+
+    ctx.restore()
+    ctx.globalAlpha = 1
   }
 
   // ── Power-up inventory chip (top center, below multiplier) ──────
@@ -3125,6 +3423,19 @@ function drawHUD(ctx: CanvasRenderingContext2D, g: GS, time: number) {
 // "ALCORN vs OPPONENT" intro card. Tinted with the opponent's primary
 // color so each level reads as a distinct rivalry. Scaled by an intro
 // pop-in / outro fade so the card animates in, holds, then dismisses.
+// Helper: smoothstep easing
+function smoothstep(t: number): number {
+  const c = Math.max(0, Math.min(1, t))
+  return c * c * (3 - 2 * c)
+}
+// Helper: bounce-overshoot easing for badge pop
+function bounceIn(t: number): number {
+  const c = Math.max(0, Math.min(1, t))
+  if (c < 0.72) return 2.2 * c * c
+  if (c < 0.9)  return 2.2 * c * c - 0.7 * (c - 0.72) * (c - 0.72) * 15
+  return 1 + (c - 1) * (c - 1) * 6 * (c - 0.7)
+}
+
 function drawVersusCard(
   ctx: CanvasRenderingContext2D,
   g: GS,
@@ -3132,138 +3443,249 @@ function drawVersusCard(
 ) {
   const opp = SCHOOL_META[g.opponent]
   const elapsed = VERSUS_DUR - g.versusTimer
-  const popIn   = clamp(elapsed / 0.35, 0, 1)
-  const popOut  = clamp(g.versusTimer / 0.35, 0, 1)
-  const alpha   = Math.min(popIn, popOut)
+  // Smooth intro/outro easing
+  const rawIn  = elapsed / 0.42
+  const rawOut = g.versusTimer / 0.30
+  const popIn  = smoothstep(Math.min(rawIn, 1))
+  const popOut = smoothstep(Math.min(rawOut, 1))
+  const alpha  = Math.min(popIn, popOut)
   const isMobile = CURRENT_MODE === 'mobile'
 
-  // Backdrop tinted with the opponent's primary color.
+  if (alpha < 0.01) return
+
+  // ── Cinematic dark backdrop ─────────────────────────────────────────
   ctx.save()
-  ctx.globalAlpha = 0.78 * alpha
-  ctx.fillStyle = '#08041e'
+  ctx.globalAlpha = 0.88 * alpha
+  ctx.fillStyle = '#04010f'
   ctx.fillRect(0, 0, GW, GH)
-  ctx.globalAlpha = 0.55 * alpha
-  const bgGrd = ctx.createLinearGradient(0, 0, GW, GH)
-  bgGrd.addColorStop(0, ALCORN_META.primary)
-  bgGrd.addColorStop(0.5, '#000000')
-  bgGrd.addColorStop(1, opp.primary)
-  ctx.fillStyle = bgGrd
-  ctx.fillRect(0, 0, GW, GH)
-  ctx.globalAlpha = 1
+  ctx.globalAlpha = alpha
+
+  // Diagonal color panels slide in from sides
+  const panelSlide = smoothstep(Math.min(elapsed / 0.55, 1))
+  // Left panel (Alcorn primary) slides in from left
+  const leftX = -GW * 0.5 * (1 - panelSlide)
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.62
+  ctx.fillStyle = ALCORN_META.primary
+  ctx.beginPath()
+  ctx.moveTo(leftX, 0)
+  ctx.lineTo(leftX + GW * 0.5 + 60, 0)
+  ctx.lineTo(leftX + GW * 0.5 - 20, GH)
+  ctx.lineTo(leftX, GH)
+  ctx.closePath()
+  ctx.fill()
+  // Right panel (opponent primary) slides in from right
+  const rightX = GW * 0.5 * (1 - panelSlide)
+  ctx.fillStyle = opp.primary
+  ctx.beginPath()
+  ctx.moveTo(GW + rightX, 0)
+  ctx.lineTo(GW * 0.5 + 20 + rightX, 0)
+  ctx.lineTo(GW * 0.5 - 60 + rightX, GH)
+  ctx.lineTo(GW + rightX, GH)
+  ctx.closePath()
+  ctx.fill()
   ctx.restore()
 
+  // Center vignette overlay
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.45
+  const vigGrd = ctx.createRadialGradient(GW/2, GH/2, 0, GW/2, GH/2, GW * 0.7)
+  vigGrd.addColorStop(0, 'rgba(0,0,0,0)')
+  vigGrd.addColorStop(1, 'rgba(0,0,0,0.85)')
+  ctx.fillStyle = vigGrd
+  ctx.fillRect(0, 0, GW, GH)
+  ctx.restore()
+
+  // Scanlines for cinematic texture
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.06
+  ctx.fillStyle = '#000000'
+  for (let sy = 0; sy < GH; sy += 4) {
+    ctx.fillRect(0, sy, GW, 2)
+  }
+  ctx.restore()
+
+  // ── Animated glowing gradient border ───────────────────────────────
+  ctx.save()
+  ctx.globalAlpha = alpha * (0.7 + 0.3 * Math.sin(time * 5))
+  const borderGrd = ctx.createLinearGradient(0, 0, GW, GH)
+  const tShift = (time * 0.3) % 1
+  borderGrd.addColorStop(Math.max(0, tShift - 0.01), ALCORN_META.secondary)
+  borderGrd.addColorStop(tShift,                       C_GOLD)
+  borderGrd.addColorStop(Math.min(1, tShift + 0.01), opp.secondary)
+  ctx.strokeStyle = borderGrd
+  ctx.lineWidth = 4
+  ctx.strokeRect(4, 4, GW - 8, GH - 8)
+  ctx.restore()
+
+  // ── Card ────────────────────────────────────────────────────────────
   ctx.save()
   ctx.translate(GW / 2, GH / 2)
-  const introScale = 0.85 + popIn * 0.18
-  const breathe = 1 + Math.sin(time * 4) * 0.015
-  ctx.scale(introScale * breathe, introScale * breathe)
+  const breathe    = 1 + Math.sin(time * 3.5) * 0.012
+  const cardScale  = smoothstep(Math.min(elapsed / 0.38, 1)) * breathe
+  ctx.scale(cardScale, cardScale)
   ctx.globalAlpha = alpha
-  ctx.textAlign = 'center'
 
-  // LEVEL N kicker.
-  const levelSize = isMobile ? 36 : 52
-  ctx.font = `bold ${levelSize}px Impact`
-  ctx.fillStyle = C_GOLD
+  const cardW = isMobile ? Math.min(GW - 36, 560) : 840
+  const cardH = isMobile ? 230 : 290
+
+  // Card shadow
+  ctx.save()
+  ctx.shadowColor = '#000'
+  ctx.shadowBlur  = 60
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'
+  roundRect(ctx, -cardW/2 + 8, -cardH/2 + 8, cardW, cardH, 20)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.restore()
+
+  // Card body
+  ctx.fillStyle = 'rgba(6, 3, 22, 0.90)'
+  roundRect(ctx, -cardW/2, -cardH/2, cardW, cardH, 18)
+  ctx.fill()
+
+  // Animated gradient border on card
+  ctx.lineWidth = 3.5
+  const t2 = (time * 0.5) % 1
+  const cardBorderGrd = ctx.createLinearGradient(-cardW/2, 0, cardW/2, 0)
+  cardBorderGrd.addColorStop(0,   ALCORN_META.secondary)
+  cardBorderGrd.addColorStop(0.3 + t2 * 0.4, C_GOLD)
+  cardBorderGrd.addColorStop(1,   opp.secondary)
+  ctx.strokeStyle = cardBorderGrd
   ctx.shadowColor = C_GOLD
-  ctx.shadowBlur = 22
-  ctx.fillText(`LEVEL ${g.level}`, 0, isMobile ? -150 : -200)
+  ctx.shadowBlur = 12 + 8 * Math.sin(time * 4)
+  roundRect(ctx, -cardW/2, -cardH/2, cardW, cardH, 18)
+  ctx.stroke()
   ctx.shadowBlur = 0
 
-  // Card frame.
-  const cardW = isMobile ? Math.min(GW - 40, 560) : 820
-  const cardH = isMobile ? 220 : 280
-  ctx.fillStyle = 'rgba(8, 4, 30, 0.85)'
-  roundRect(ctx, -cardW/2, -cardH/2, cardW, cardH, 18); ctx.fill()
-  ctx.lineWidth = 4
-  const frameGrd = ctx.createLinearGradient(-cardW/2, 0, cardW/2, 0)
-  frameGrd.addColorStop(0, ALCORN_META.secondary)
-  frameGrd.addColorStop(0.5, C_WHITE)
-  frameGrd.addColorStop(1, opp.secondary)
-  ctx.strokeStyle = frameGrd
-  roundRect(ctx, -cardW/2, -cardH/2, cardW, cardH, 18); ctx.stroke()
+  // ── Helmet fly-in ───────────────────────────────────────────────────
+  const helmetFly  = smoothstep(Math.min((elapsed - 0.08) / 0.45, 1))
+  const teamSize   = isMobile ? 34 : 50
+  const helmetR    = isMobile ? 40 : 58
+  const helmetX    = cardW/2 - helmetR - 10
+  const textX      = cardW/4 - 38
 
-  // Left half — ALCORN.
-  const teamSize = isMobile ? 36 : 52
-  const helmetR  = isMobile ? 38 : 56
-  const helmetX  = cardW/2 - helmetR - 14
-  const textX    = cardW/4 - 40
-  ctx.font = `bold ${teamSize}px Impact`
+  // Left half color fill (Alcorn)
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.82
   ctx.fillStyle = ALCORN_META.primary
-  ctx.fillRect(-cardW/2 + 8, -cardH/2 + 8, cardW/2 - 8 - 60, cardH - 16)
-  ctx.fillStyle = ALCORN_META.secondary
-  ctx.shadowColor = ALCORN_META.secondary
-  ctx.shadowBlur = 18
-  // Auto-shrink the Alcorn label if it overruns the available text width.
-  const labelMax = cardW/2 - helmetR * 2 - 60
-  let alcFontSize = teamSize
-  ctx.font = `bold ${alcFontSize}px Impact`
-  while (ctx.measureText(ALCORN_META.display).width > labelMax && alcFontSize > 20) {
-    alcFontSize -= 2
-    ctx.font = `bold ${alcFontSize}px Impact`
-  }
-  ctx.fillText(ALCORN_META.display, -textX, isMobile ? 38 : 56)
-  ctx.shadowBlur = 0
-  ctx.fillStyle = C_WHITE
-  ctx.font = isMobile ? 'bold 14px Impact' : 'bold 18px Impact'
-  ctx.fillText('HOME', -textX, isMobile ? -78 : -100)
+  ctx.fillRect(-cardW/2 + 8, -cardH/2 + 8, cardW/2 - 68, cardH - 16)
+  ctx.restore()
 
-  // Right half — OPPONENT.
-  ctx.font = `bold ${teamSize}px Impact`
+  // Right half color fill (opponent)
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.82
   ctx.fillStyle = opp.primary
-  ctx.fillRect(60, -cardH/2 + 8, cardW/2 - 8 - 60, cardH - 16)
-  ctx.fillStyle = opp.secondary
-  ctx.shadowColor = opp.secondary
-  ctx.shadowBlur = 18
-  // Auto-shrink the opponent label if it overruns the available text width.
-  let oppFontSize = teamSize
-  ctx.font = `bold ${oppFontSize}px Impact`
-  while (ctx.measureText(opp.display).width > labelMax && oppFontSize > 20) {
-    oppFontSize -= 2
-    ctx.font = `bold ${oppFontSize}px Impact`
-  }
-  ctx.fillText(opp.display, textX, isMobile ? 38 : 56)
-  ctx.shadowBlur = 0
-  ctx.fillStyle = C_WHITE
-  ctx.font = isMobile ? 'bold 14px Impact' : 'bold 18px Impact'
-  ctx.fillText('AWAY', textX, isMobile ? -78 : -100)
+  ctx.fillRect(60, -cardH/2 + 8, cardW/2 - 68, cardH - 16)
+  ctx.restore()
 
-  // Helmet images — Alcorn always on the LEFT, opponent on the RIGHT. Mirrors
-  // the start-screen clash so both screens feel on-brand. Falls back to the
-  // procedural drawHelmet whenever the sprite hasn't loaded yet.
+  // Alcorn helmet slides in from left
+  const alcHX = -helmetX - (1 - helmetFly) * cardW * 0.6
   {
     const alcImg = getMenuHelmetImage(MENU_ALCORN_HELMET.src)
     const helmetY = 0
-    if (alcImg) drawHelmetImage(ctx, -helmetX, helmetY, helmetR, alcImg, false)
-    else drawHelmet(ctx, -helmetX, helmetY, helmetR,
+    ctx.save()
+    ctx.shadowColor = ALCORN_META.secondary
+    ctx.shadowBlur  = 22 + 12 * Math.sin(time * 4)
+    if (alcImg) drawHelmetImage(ctx, alcHX, helmetY, helmetR, alcImg, false)
+    else drawHelmet(ctx, alcHX, helmetY, helmetR,
                     ALCORN_META.primary, ALCORN_META.secondary, '82')
-    const oppSrc = OPPONENT_HELMET_SRC[g.opponent]
-    const oppImg = oppSrc ? getMenuHelmetImage(oppSrc) : undefined
-    if (oppImg) drawHelmetImage(ctx, helmetX, helmetY, helmetR, oppImg, true)
-    else drawHelmet(ctx, helmetX, helmetY, helmetR,
-                    opp.primary, opp.secondary, '1')
+    ctx.shadowBlur = 0
+    ctx.restore()
   }
 
-  // Center "VS" badge.
-  const vsR = isMobile ? 38 : 52
+  // Opponent helmet slides in from right
+  const oppHX = helmetX + (1 - helmetFly) * cardW * 0.6
+  {
+    const oppSrc = OPPONENT_HELMET_SRC[g.opponent]
+    const oppImg = oppSrc ? getMenuHelmetImage(oppSrc) : undefined
+    const helmetY = 0
+    ctx.save()
+    ctx.shadowColor = opp.secondary
+    ctx.shadowBlur  = 22 + 12 * Math.sin(time * 4 + 1.2)
+    if (oppImg) drawHelmetImage(ctx, oppHX, helmetY, helmetR, oppImg, true)
+    else drawHelmet(ctx, oppHX, helmetY, helmetR,
+                    opp.primary, opp.secondary, '1')
+    ctx.shadowBlur = 0
+    ctx.restore()
+  }
+
+  // ── Team name labels ────────────────────────────────────────────────
+  ctx.textAlign = 'center'
+  const labelMax = cardW/2 - helmetR * 2 - 60
+
+  let alcFontSize = teamSize
+  ctx.font = `bold ${alcFontSize}px Impact`
+  while (ctx.measureText(ALCORN_META.display).width > labelMax && alcFontSize > 18) {
+    alcFontSize -= 2
+    ctx.font = `bold ${alcFontSize}px Impact`
+  }
+  ctx.fillStyle = ALCORN_META.secondary
+  ctx.shadowColor = ALCORN_META.secondary
+  ctx.shadowBlur = 16
+  ctx.fillText(ALCORN_META.display, -textX, isMobile ? 42 : 60)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = C_WHITE
+  ctx.font = isMobile ? 'bold 14px Impact' : 'bold 17px Impact'
+  ctx.fillText('HOME', -textX, isMobile ? -82 : -106)
+
+  let oppFontSize = teamSize
+  ctx.font = `bold ${oppFontSize}px Impact`
+  while (ctx.measureText(opp.display).width > labelMax && oppFontSize > 18) {
+    oppFontSize -= 2
+    ctx.font = `bold ${oppFontSize}px Impact`
+  }
+  ctx.fillStyle = opp.secondary
+  ctx.shadowColor = opp.secondary
+  ctx.shadowBlur = 16
+  ctx.fillText(opp.display, textX, isMobile ? 42 : 60)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = C_WHITE
+  ctx.font = isMobile ? 'bold 14px Impact' : 'bold 17px Impact'
+  ctx.fillText('AWAY', textX, isMobile ? -82 : -106)
+
+  // ── VS badge bounce-in with overshoot ──────────────────────────────
+  const vsFly  = bounceIn(Math.min((elapsed - 0.14) / 0.50, 1))
+  const vsR    = isMobile ? 40 : 54
+  ctx.save()
+  ctx.scale(vsFly, vsFly)
   ctx.fillStyle = C_GOLD
   ctx.shadowColor = C_GOLD
-  ctx.shadowBlur = 24
-  ctx.beginPath(); ctx.arc(0, 0, vsR, 0, Math.PI*2); ctx.fill()
+  ctx.shadowBlur = 28 + 14 * Math.sin(time * 6)
+  ctx.beginPath(); ctx.arc(0, 0, vsR, 0, Math.PI * 2); ctx.fill()
   ctx.shadowBlur = 0
   ctx.fillStyle = '#000'
-  ctx.font = `bold ${isMobile ? 38 : 52}px Impact`
+  ctx.font = `bold ${isMobile ? 36 : 50}px Impact`
   ctx.fillText('VS', 0, isMobile ? 14 : 18)
+  ctx.restore()
 
-  // Subtitle below the card.
-  ctx.fillStyle = C_WHITE
-  ctx.font = isMobile ? 'bold 16px Impact' : 'bold 22px Impact'
+  // ── LEVEL N kicker (fades in after card appears) ────────────────────
+  const levelFade = smoothstep(Math.min((elapsed - 0.20) / 0.30, 1))
+  ctx.save()
+  ctx.globalAlpha = alpha * levelFade
+  ctx.font = `bold ${isMobile ? 36 : 52}px Impact`
+  ctx.fillStyle = C_GOLD
+  ctx.shadowColor = C_GOLD
+  ctx.shadowBlur = 26
+  ctx.fillText(`LEVEL ${g.level}`, 0, isMobile ? -(cardH/2) - 26 : -(cardH/2) - 36)
+  ctx.shadowBlur = 0
+  ctx.restore()
+
+  // ── Subtitle fade-in ────────────────────────────────────────────────
+  const subtitleFade = smoothstep(Math.min((elapsed - 0.28) / 0.30, 1))
+  ctx.save()
+  ctx.globalAlpha = alpha * subtitleFade
+  ctx.fillStyle = 'rgba(255,255,255,0.88)'
+  ctx.font = isMobile ? 'bold 15px Impact' : 'bold 20px Impact'
   ctx.fillText(
     `FIRST TO ${LEVEL_TD_GOAL} TOUCHDOWNS WINS`,
-    0, cardH/2 + (isMobile ? 36 : 50),
+    0, cardH/2 + (isMobile ? 30 : 44),
   )
-
-  ctx.globalAlpha = 1
   ctx.restore()
+
+  ctx.restore()   // card transform
+  ctx.restore()   // backdrop
+  ctx.globalAlpha = 1
   ctx.textAlign = 'left'
 }
 
@@ -4752,6 +5174,7 @@ function render(
 
   // Player last (always on top of field items at same Y) — sprite-based
   drawPlayerSprite(ctx, g)
+  drawSpeedEffects(ctx, g, time)
 
   drawParticles(ctx, g)
   drawFloatTexts(ctx, g)
@@ -4893,6 +5316,8 @@ export function GamePage() {
     helmetCrackMissed = false
     // Start background music on first user gesture (respects autoplay policy).
     audioManager.startMusic().catch(() => {})
+    // Procedural crowd noise — starts quiet and builds with multiplier.
+    audioManager.startCrowd()
     // UI click on start / restart.
     audioManager.playUIClick()
     // Reset boost-loop tracking so the edge detector starts clean.

@@ -211,6 +211,17 @@ class AudioManager {
   private boostLoopSrc:    AudioBufferSourceNode | null = null
   private boostLoopGain:   GainNode | null = null
 
+  // ── Crowd noise layer ──────────────────────────────────────────────────
+  // Procedural stadium crowd: a 2-second noise buffer played on loop
+  // through three gain nodes — ambient murmur (constant), swell
+  // (ramps with combo), and peak roar (spikes on big plays).
+  private crowdSrc:         AudioBufferSourceNode | null = null
+  private crowdGainAmbient: GainNode | null = null
+  private crowdGainSwell:   GainNode | null = null
+  private crowdGainRoar:    GainNode | null = null
+  private crowdBuf:         AudioBuffer | null = null
+  private crowdStarted:     boolean = false
+
   constructor() {
     this.musicOn = loadMusicPref()
   }
@@ -748,6 +759,120 @@ class AudioManager {
     }, FADE_SETTLE * 1000)
   }
 
+  // ── Crowd noise layer ─────────────────────────────────────────────────
+
+  /** Build a 2-second noise buffer that loops seamlessly as stadium crowd. */
+  private buildCrowdBuffer(ac: AudioContext): AudioBuffer {
+    const sr = ac.sampleRate
+    const len = Math.ceil(sr * 2.0)
+    const buf = ac.createBuffer(2, len, sr)
+    // Two channels with different random seeds so the stereo image is wide.
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch)
+      // Fill with band-limited noise in two passes:
+      // 1) dense broadband chatter (many voices = white-ish noise)
+      // 2) low-frequency swell (crowd breathing as a unit)
+      const seed = ch === 0 ? 1664525 : 22695477
+      let s = seed
+      const lrng = () => { s = (s * 1664525 + 1013904223) & 0x7fffffff; return s / 0x7fffffff * 2 - 1 }
+      for (let i = 0; i < len; i++) d[i] = lrng()
+      // Smooth with a simple 3-tap moving average to tilt noise pink-ward.
+      for (let i = 1; i < len - 1; i++) {
+        d[i] = (d[i - 1] * 0.25 + d[i] * 0.5 + d[i + 1] * 0.25)
+      }
+    }
+    return buf
+  }
+
+  /** Start the procedural crowd layer. Safe to call multiple times — no-ops
+   *  if already running or if the AudioContext isn't ready. */
+  startCrowd(): void {
+    if (this.crowdStarted) return
+    const ac = this.ac
+    if (!ac || ac.state !== 'running') return
+
+    const buf = this.buildCrowdBuffer(ac)
+    this.crowdBuf = buf
+
+    // Three gain nodes in parallel for ambient / swell / roar layers.
+    const ambient = ac.createGain()
+    const swell   = ac.createGain()
+    const roar    = ac.createGain()
+    ambient.gain.value = this.musicOn ? 0.038 : 0
+    swell.gain.value   = 0
+    roar.gain.value    = 0
+
+    // Bandpass filter shapes each layer: ambient is mid-high chatter,
+    // swell is low-mid rumble, roar is a wide full-range burst.
+    const bpAmbient = ac.createBiquadFilter()
+    bpAmbient.type = 'bandpass'; bpAmbient.frequency.value = 2200; bpAmbient.Q.value = 0.8
+
+    const bpSwell = ac.createBiquadFilter()
+    bpSwell.type = 'bandpass'; bpSwell.frequency.value = 600; bpSwell.Q.value = 0.6
+
+    const bpRoar = ac.createBiquadFilter()
+    bpRoar.type = 'lowshelf'; bpRoar.frequency.value = 800; bpRoar.gain.value = 6
+
+    // One noise source feeds all three parallel paths.
+    const src = ac.createBufferSource()
+    src.buffer = buf
+    src.loop = true
+    src.loopStart = 0
+    src.loopEnd = buf.duration
+
+    src.connect(bpAmbient); bpAmbient.connect(ambient); ambient.connect(this.sfxGain!)
+    src.connect(bpSwell);   bpSwell.connect(swell);     swell.connect(this.sfxGain!)
+    src.connect(bpRoar);    bpRoar.connect(roar);       roar.connect(this.sfxGain!)
+
+    src.start()
+    this.crowdSrc         = src
+    this.crowdGainAmbient = ambient
+    this.crowdGainSwell   = swell
+    this.crowdGainRoar    = roar
+    this.crowdStarted     = true
+  }
+
+  /** Stop and clean up the crowd layer. */
+  stopCrowd(): void {
+    if (!this.crowdSrc) return
+    try { this.crowdSrc.stop() } catch { /* already ended */ }
+    this.crowdSrc = null
+    this.crowdGainAmbient = null
+    this.crowdGainSwell   = null
+    this.crowdGainRoar    = null
+    this.crowdStarted     = false
+  }
+
+  /** Drive crowd intensity from gameplay state. Call once per game tick.
+   *  `excitement` 0..1 (combo-based ramp), `roar` 0..1 (spike on big plays). */
+  setCrowdIntensity(excitement: number, roar: number): void {
+    if (!this.ac || this.ac.state !== 'running') return
+    if (!this.crowdStarted) this.startCrowd()
+    const now = this.ac.currentTime
+    const vol = this.musicOn ? 1 : 0
+
+    if (this.crowdGainAmbient) {
+      const target = 0.038 * vol
+      this.crowdGainAmbient.gain.setTargetAtTime(target, now, 0.3)
+    }
+    if (this.crowdGainSwell) {
+      // Excitement ramps the swell: 0 at multiplier 1×, full at 8×.
+      const target = excitement * 0.055 * vol
+      this.crowdGainSwell.gain.setTargetAtTime(target, now, 0.25)
+    }
+    if (this.crowdGainRoar) {
+      // Roar spikes then decays quickly.
+      const target = roar * 0.11 * vol
+      if (roar > 0.5) {
+        this.crowdGainRoar.gain.cancelScheduledValues(now)
+        this.crowdGainRoar.gain.setValueAtTime(target, now)
+        this.crowdGainRoar.gain.setTargetAtTime(0, now + 0.15, 0.55)
+      } else {
+        this.crowdGainRoar.gain.setTargetAtTime(target, now, 0.6)
+      }
+    }
+  }
+
   /** Whoosh/deflation sound — plays the moment boost expires. */
   playBoostEnd(): void {
     const ac = this.ac
@@ -804,7 +929,6 @@ class AudioManager {
     flt.frequency.exponentialRampToValueAtTime(3200, now + 0.14)
     flt.Q.value = 4
     const g = ac.createGain()
-    g.gain.setValueAtTime(0.28, now)
     g.gain.exponentialRampToValueAtTime(0.01, now + 0.20)
     nSrc.connect(flt); flt.connect(g); g.connect(this.sfxGain!)
     nSrc.start(now)
@@ -827,10 +951,7 @@ class AudioManager {
   }
 
   /** Short percussive "whomp" accent — plays on the frame a defender is
-   *  cleared by the spin radius sweep. Distinct from playSpin (the announcer
-   *  voice line on activation): this is a per-clear hit-confirmation. A
-   *  body-thump sub-tone plus a bright transient stab. Throttled to 90 ms so
-   *  simultaneous multi-defender clears don't stack into a wall of noise. */
+   *  cleared by the spin radius sweep. Throttled to 90 ms. */
   playSpinClear(): void {
     const ac = this.ac
     if (!ac || ac.state !== 'running') return
@@ -842,7 +963,6 @@ class AudioManager {
     const now = ac.currentTime
     const sr = ac.sampleRate
 
-    // Body thump — low descending sine.
     const osc = ac.createOscillator()
     osc.type = 'sine'
     osc.frequency.setValueAtTime(220, now)
@@ -853,7 +973,6 @@ class AudioManager {
     osc.connect(og); og.connect(this.sfxGain!)
     osc.start(now); osc.stop(now + 0.20)
 
-    // Bright transient — short filtered noise burst for the swept-through air.
     const sz = Math.ceil(sr * 0.10)
     const buf = ac.createBuffer(1, sz, sr)
     const d = buf.getChannelData(0)
@@ -869,10 +988,8 @@ class AudioManager {
     nSrc.start(now)
   }
 
-  /** Short doppler-style "whoosh" accent — plays the moment a defender
-   *  passes under the player during the jump window. A downward-sweeping
-   *  filtered noise burst suggests something rushing past below. Throttled
-   *  to 90 ms so back-to-back jump clears don't stack. */
+  /** Short doppler-style "whoosh" — plays when a defender passes under
+   *  the player during the jump window. Throttled to 90 ms. */
   playJumpClear(): void {
     const ac = this.ac
     if (!ac || ac.state !== 'running') return
@@ -884,7 +1001,6 @@ class AudioManager {
     const now = ac.currentTime
     const sr = ac.sampleRate
 
-    // Downward-swept noise — defender passing below.
     const sz = Math.ceil(sr * 0.18)
     const buf = ac.createBuffer(1, sz, sr)
     const d = buf.getChannelData(0)
@@ -901,7 +1017,6 @@ class AudioManager {
     nSrc.connect(flt); flt.connect(ng); ng.connect(this.sfxGain!)
     nSrc.start(now)
 
-    // Short low thud underneath — body weight passing below.
     const osc = ac.createOscillator()
     osc.type = 'sine'
     osc.frequency.setValueAtTime(150, now)
@@ -913,7 +1028,7 @@ class AudioManager {
     osc.start(now); osc.stop(now + 0.18)
   }
 
-  /** Three-note ascending chime — plays at yardage milestones during a run.
+  /** Three-note ascending chime — plays at yardage milestones.
    *  Throttled to 600 ms so back-to-back milestones don't overlap. */
   playMilestoneChime(): void {
     const ac = this.ac
