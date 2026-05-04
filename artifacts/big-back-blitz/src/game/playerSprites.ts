@@ -24,7 +24,7 @@ export const SPRITE_H = 192
 // How many frames each state has on disk.
 const FRAME_COUNTS: Record<PlayerSpriteState, number> = {
   idle: 2,
-  run: 8,
+  run: 2,
   sprint: 4,
   jump: 3,
   lane_left: 2,
