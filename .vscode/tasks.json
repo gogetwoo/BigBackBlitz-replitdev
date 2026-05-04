@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Big Back Blitz: dev",
+      "type": "shell",
+      "command": "pnpm --filter @workspace/big-back-blitz dev",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PORT": "5173",
+          "BASE_PATH": "/"
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": false
+      }
+    },
+    {
+      "label": "Mockup sandbox: dev",
+      "type": "shell",
+      "command": "pnpm --filter @workspace/mockup-sandbox dev",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PORT": "5174",
+          "BASE_PATH": "/"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

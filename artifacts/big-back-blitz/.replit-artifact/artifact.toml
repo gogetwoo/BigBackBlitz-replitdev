@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Big Back Blitz"
+version = "1.0.0"
+id = "artifacts/big-back-blitz"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24809
+
+[services.development]
+run = "pnpm --filter @workspace/big-back-blitz run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/big-back-blitz", "run", "build" ]
+publicDir = "artifacts/big-back-blitz/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24809"
+BASE_PATH = "/"

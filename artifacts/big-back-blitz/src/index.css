@@ -1,0 +1,777 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0d0820;
+}
+
+body {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  /* Disable iOS rubber-band / double-tap zoom while playing */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+@keyframes pulse {
+  0% { transform: translateX(-50%) scale(1); }
+  50% { transform: translateX(-50%) scale(1.15); }
+  100% { transform: translateX(-50%) scale(1); }
+}
+
+/* ─── Safe-area probes ────────────────────────────────────────────────────
+ * Hidden zero-sized elements whose padding is set to env(safe-area-inset-*).
+ * The React layer reads `offsetHeight` to recover the resolved CSS-pixel
+ * inset and feeds it into the canvas HUD layout. */
+.safe-probe {
+  position: fixed;
+  left: 0;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.safe-probe--top { top: 0; padding-top: env(safe-area-inset-top, 0px); }
+
+/* ─── Mode picker (Desktop / Mobile) ─────────────────────────────────────── */
+.mode-picker {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.mode-picker__row {
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.mode-picker__music-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.mode-picker__btn {
+  appearance: none;
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  background: rgba(8, 4, 30, 0.78);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 16px;
+  letter-spacing: 1px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 110px;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.mode-picker__btn:active {
+  transform: translateY(1px);
+}
+
+.mode-picker__btn.is-active {
+  background: #4B0082;
+  border-color: #FFD700;
+  box-shadow: 0 0 16px rgba(255, 215, 0, 0.45);
+}
+
+.mode-picker__label {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.mode-picker__hint {
+  font-size: 10px;
+  color: #FFD700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* Small gear icon button shown on the start/game-over menu when the
+   user already has a saved mode preference. Tapping it reveals the
+   picker as a popover (.mode-picker--popover) so returning players
+   see a clean menu instead of the full Desktop/Mobile picker. */
+.mode-picker-toggle {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  z-index: 25;
+  appearance: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  background: rgba(8, 4, 30, 0.7);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: transform 0.05s, background 0.1s, border-color 0.1s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.mode-picker-toggle:hover {
+  border-color: #FFD700;
+}
+
+.mode-picker-toggle:active {
+  transform: scale(0.92);
+  background: rgba(75, 0, 130, 0.85);
+}
+
+/* Popover variant: anchored under the gear icon in the top-right
+   corner instead of centered at the top. */
+.mode-picker.mode-picker--popover {
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  left: auto;
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  transform: none;
+  background: rgba(13, 8, 32, 0.94);
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  border-radius: 12px;
+  padding: 12px;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  z-index: 24;
+}
+
+.mode-picker__title {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: rgba(255, 255, 255, 0.65);
+  text-transform: uppercase;
+}
+
+/* ─── Pause button (visible during play / pause, both modes) ─────────────── */
+.pause-btn {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  z-index: 25;
+  appearance: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  background: rgba(8, 4, 30, 0.7);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: transform 0.05s, background 0.1s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.pause-btn:active {
+  transform: scale(0.92);
+  background: rgba(75, 0, 130, 0.85);
+}
+
+/* ─── Pause overlay ──────────────────────────────────────────────────────── */
+.pause-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 4, 30, 0.78);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 16px)
+           env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 16px);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pause-overlay__panel {
+  background: rgba(13, 8, 32, 0.92);
+  border: 2px solid rgba(255, 215, 0, 0.6);
+  border-radius: 16px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  min-width: 280px;
+  max-width: 90vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.pause-overlay__title {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 38px;
+  letter-spacing: 4px;
+  color: #FFD700;
+  text-shadow: 0 0 18px rgba(255, 215, 0, 0.4);
+  margin: 0;
+}
+
+.pause-overlay__section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.pause-overlay__label {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 13px;
+  letter-spacing: 3px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.pause-overlay__note {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #FFD700;
+  text-align: center;
+  margin: 4px 0 0 0;
+}
+
+.pause-overlay__resume {
+  appearance: none;
+  border: 2px solid #FFD700;
+  background: linear-gradient(180deg, #5b1095, #320058);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 22px;
+  letter-spacing: 2px;
+  padding: 12px 36px;
+  border-radius: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transition: transform 0.05s;
+}
+
+.pause-overlay__resume:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* ─── On-screen touch controls (mobile only) ─────────────────────────────── */
+.touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.touch-btn {
+  position: absolute;
+  pointer-events: auto;
+  appearance: none;
+  border: 2px solid rgba(255, 215, 0, 0.55);
+  background: rgba(8, 4, 30, 0.6);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  letter-spacing: 1px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  backdrop-filter: blur(2px);
+  transition: transform 0.05s, background 0.1s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.touch-btn:active {
+  transform: scale(0.92);
+  background: rgba(75, 0, 130, 0.85);
+}
+
+/* Empty-inventory state for action buttons. The button is still
+   tappable (so the "NEED POWER-UP!" flash still fires), but the muted
+   colors + dimmed opacity telegraph that no power-up is available. */
+.touch-btn--disabled {
+  opacity: 0.4;
+  border-color: rgba(160, 160, 160, 0.45) !important;
+  color: #aaaaaa !important;
+  background: rgba(8, 4, 30, 0.4);
+  box-shadow: none;
+}
+
+/* Big circular lane buttons at bottom corners — sized for thumbs and
+   pulled inward from the edges so they sit naturally under the resting
+   position of a held phone. */
+.touch-btn--lane {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  font-size: 36px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+}
+
+.touch-btn--left {
+  left: calc(env(safe-area-inset-left, 0px) + 16px);
+}
+
+.touch-btn--right {
+  right: calc(env(safe-area-inset-right, 0px) + 16px);
+}
+
+/* Action buttons sit between the lane buttons. Smaller pill shape so
+   they don't crowd thumbs but stay easy to tap. */
+.touch-btn--action {
+  width: 78px;
+  height: 56px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 700;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 38px);
+}
+
+/* Three action buttons spread across the center bottom.
+   JUMP left-of-center, SPIN in the middle, TURBO right-of-center. */
+.touch-btn--jump {
+  left: 50%;
+  transform: translateX(calc(-50% - 96px));
+  border-color: #cccccc;
+  color: #dddddd;
+}
+
+.touch-btn--jump:active {
+  transform: translateX(calc(-50% - 96px)) scale(0.92);
+}
+
+.touch-btn--spin {
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: #FFD700;
+  color: #FFD700;
+}
+
+.touch-btn--spin:active {
+  transform: translateX(-50%) scale(0.92);
+}
+
+.touch-btn--turbo {
+  left: 50%;
+  transform: translateX(calc(-50% + 96px));
+  border-color: #ff8800;
+  color: #ffb347;
+}
+
+.touch-btn--turbo:active {
+  transform: translateX(calc(-50% + 96px)) scale(0.92);
+}
+
+/* ─── Landscape phone variant ────────────────────────────────────────────
+ * Two thumb-stacks anchored at the bottom corners instead of a row of
+ * four buttons across the bottom. Each thumb covers a lane button (on
+ * the bottom) and an action button stacked just above it, leaving the
+ * full middle of the screen unobstructed for the play field. Buttons
+ * are slightly smaller than portrait because vertical space is at a
+ * premium when the phone is rotated. */
+.touch-controls--landscape .touch-btn--lane {
+  width: 72px;
+  height: 72px;
+  font-size: 32px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+}
+
+.touch-controls--landscape .touch-btn--left {
+  left: calc(env(safe-area-inset-left, 0px) + 18px);
+}
+
+.touch-controls--landscape .touch-btn--right {
+  right: calc(env(safe-area-inset-right, 0px) + 18px);
+}
+
+.touch-controls--landscape .touch-btn--action {
+  width: 72px;
+  height: 50px;
+  font-size: 14px;
+  /* Stack each action button directly above its matching lane button
+     so a single thumb can cycle between the two without travelling. */
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px + 72px + 8px);
+}
+
+.touch-controls--landscape .touch-btn--jump {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.touch-controls--landscape .touch-btn--jump:active {
+  transform: translateX(-50%) scale(0.92);
+}
+
+.touch-controls--landscape .touch-btn--spin {
+  left: calc(env(safe-area-inset-left, 0px) + 18px);
+  transform: none;
+}
+
+.touch-controls--landscape .touch-btn--spin:active {
+  transform: scale(0.92);
+}
+
+.touch-controls--landscape .touch-btn--turbo {
+  left: auto;
+  right: calc(env(safe-area-inset-right, 0px) + 18px);
+  transform: none;
+}
+
+.touch-controls--landscape .touch-btn--turbo:active {
+  transform: scale(0.92);
+}
+
+/* ─── Controller indicator toast ─────────────────────────────────────────── */
+.gp-toast {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 26;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 215, 0, 0.55);
+  background: rgba(8, 4, 30, 0.82);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: gp-toast-fade 2.2s ease forwards;
+}
+
+.gp-toast__icon {
+  color: #ffd700;
+  flex: 0 0 auto;
+}
+
+.gp-toast__text {
+  white-space: nowrap;
+}
+
+@keyframes gp-toast-fade {
+  0%   { opacity: 0; transform: translate(-50%, -8px); }
+  10%  { opacity: 1; transform: translate(-50%, 0); }
+  80%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -4px); }
+}
+
+/* ─── Controller focus hint ──────────────────────────────────────────────── */
+/* Shown when a gamepad is connected but the page doesn't have focus, so
+   audio cannot unlock and `gamepadconnected` events may be deferred until
+   the player clicks the game window. */
+.gp-focus-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 27;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  border: 1.5px solid rgba(255, 215, 0, 0.7);
+  background: rgba(8, 4, 30, 0.88);
+  color: #fff;
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 16px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  animation: gp-focus-hint-pulse 1.6s ease-in-out infinite;
+}
+
+.gp-focus-hint__icon {
+  color: #ffd700;
+  flex: 0 0 auto;
+}
+
+.gp-focus-hint__text {
+  white-space: nowrap;
+}
+
+@keyframes gp-focus-hint-pulse {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6),
+                0 0 0 0 rgba(255, 215, 0, 0.45);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.04);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.6),
+                0 0 0 10px rgba(255, 215, 0, 0);
+  }
+}
+
+/* ─── Initials entry overlay (game-over leaderboard save) ──────────────── */
+.initials-entry {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 16px calc(env(safe-area-inset-bottom, 0px) + 24px);
+  pointer-events: auto;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 4, 30, 0) 0%,
+    rgba(8, 4, 30, 0) 55%,
+    rgba(8, 4, 30, 0.55) 100%
+  );
+}
+
+.initials-entry__panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 24px 16px;
+  border-radius: 14px;
+  background: rgba(20, 6, 40, 0.92);
+  border: 2px solid #FFD700;
+  box-shadow: 0 0 24px rgba(255, 215, 0, 0.35), 0 8px 28px rgba(0, 0, 0, 0.55);
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  color: #fff;
+  max-width: min(94vw, 460px);
+  animation: initials-entry-pop 0.32s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+@keyframes initials-entry-pop {
+  0%   { transform: translateY(20px) scale(0.92); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.initials-entry__title {
+  color: #FFD700;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.65);
+  font-size: 18px;
+  letter-spacing: 1.2px;
+  text-align: center;
+}
+
+.initials-entry__sub {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  letter-spacing: 0.8px;
+}
+
+.initials-entry__slots {
+  display: flex;
+  gap: 10px;
+  margin: 4px 0 6px;
+}
+
+.initials-entry__slot {
+  width: 56px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(8, 4, 30, 0.7);
+  border: 2px solid rgba(255, 215, 0, 0.35);
+  font-size: 38px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0;
+  transition: border-color 0.15s, color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.initials-entry__slot--filled {
+  color: #fff;
+  border-color: #FFD700;
+  box-shadow: 0 0 14px rgba(255, 215, 0, 0.45);
+}
+.initials-entry__slot--active {
+  border-color: #FFD700;
+  color: rgba(255, 215, 0, 0.85);
+  animation: initials-entry-blink 0.9s ease-in-out infinite;
+  transform: translateY(-2px);
+  box-shadow: 0 0 16px rgba(255, 215, 0, 0.55);
+}
+
+@keyframes initials-entry-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+.initials-entry__input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+  /* Keep IME / autofill from styling it visibly. */
+  background: transparent;
+  color: transparent;
+}
+
+.initials-entry__buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.initials-entry__btn {
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 18px;
+  letter-spacing: 1.5px;
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: 2px solid;
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.initials-entry__btn:active {
+  transform: translateY(1px);
+}
+.initials-entry__btn--save {
+  background: #4B0082;
+  border-color: #FFD700;
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 215, 0, 0.4);
+}
+.initials-entry__btn--save:hover:not(:disabled) {
+  background: #5e00a8;
+}
+.initials-entry__btn--save:disabled {
+  background: rgba(75, 0, 130, 0.45);
+  border-color: rgba(255, 215, 0, 0.35);
+  color: rgba(255, 255, 255, 0.55);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.initials-entry__btn--skip {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.75);
+}
+.initials-entry__btn--skip:hover {
+  border-color: rgba(255, 255, 255, 0.65);
+  color: #fff;
+}
+
+.initials-entry__hint {
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  letter-spacing: 0.6px;
+}
+.initials-entry__hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-family: inherit;
+  font-size: 11px;
+  margin: 0 2px;
+}
+
+/* ─── Music toggle button ────────────────────────────────────────────────── */
+.music-toggle {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 215, 0, 0.4);
+  background: rgba(8, 4, 30, 0.75);
+  color: rgba(255, 255, 255, 0.6);
+  font-family: 'Impact', 'Arial Black', sans-serif;
+  font-size: 18px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.music-toggle:active {
+  transform: translateY(1px) scale(0.97);
+}
+
+.music-toggle--on {
+  border-color: #FFD700;
+  background: rgba(75, 0, 130, 0.65);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 215, 0, 0.3);
+}
+
+.music-toggle--compact {
+  padding: 8px 16px;
+  font-size: 15px;
+  width: 100%;
+  justify-content: center;
+}
+
+.music-toggle__icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.music-toggle__label {
+  font-size: inherit;
+  letter-spacing: 2px;
+}
+
+/* Tighter spacing on shorter / mobile viewports. */
+@media (max-height: 680px), (max-width: 520px) {
+  .initials-entry__panel {
+    padding: 12px 16px 12px;
+    gap: 6px;
+  }
+  .initials-entry__slot {
+    width: 44px;
+    height: 52px;
+    font-size: 28px;
+  }
+  .initials-entry__title { font-size: 15px; }
+  .initials-entry__sub { font-size: 12px; }
+  .initials-entry__btn { font-size: 16px; padding: 8px 18px; }
+}
