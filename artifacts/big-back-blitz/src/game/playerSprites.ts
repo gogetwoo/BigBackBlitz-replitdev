@@ -4,6 +4,7 @@
 // per frame with zero per-frame allocations.
 
 const BASE = `${import.meta.env.BASE_URL}sprites/player/`
+const SPRINT_SHEET = `${BASE}sprint_sheet.png`
 
 export type PlayerSpriteState =
   | 'idle'
@@ -25,7 +26,7 @@ export const SPRITE_H = 192
 const FRAME_COUNTS: Record<PlayerSpriteState, number> = {
   idle: 2,
   run: 2,
-  sprint: 4,
+  sprint: 10,
   jump: 3,
   lane_left: 2,
   lane_right: 2,
@@ -72,12 +73,74 @@ let loadingPromise: Promise<void> | null = null
 // fallback placeholder dot for any that didn't).
 const PRELOAD_TIMEOUT_MS = 5000
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  const img = new Image()
+  img.decoding = 'async'
+  return new Promise((resolve, reject) => {
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error(`failed to load ${src}`))
+    img.src = src
+  })
+}
+
+async function sliceSprintSheetIntoFrames(): Promise<void> {
+  const sheet = await loadImage(SPRINT_SHEET)
+  const cols = 5
+  const rows = 2
+  const total = FRAME_COUNTS.sprint
+  const cellW = Math.floor(sheet.naturalWidth / cols)
+  const cellH = Math.floor(sheet.naturalHeight / rows)
+  if (cellW <= 0 || cellH <= 0) {
+    throw new Error('invalid sprint sheet dimensions')
+  }
+
+  const out: HTMLImageElement[] = new Array(total)
+  for (let i = 0; i < total; i++) {
+    const sx = (i % cols) * cellW
+    const sy = Math.floor(i / cols) * cellH
+
+    const canvas = document.createElement('canvas')
+    canvas.width = SPRITE_W
+    canvas.height = SPRITE_H
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('failed to create sprint frame canvas context')
+
+    if (typeof createImageBitmap === 'function') {
+      let bitmap: ImageBitmap | null = null
+      try {
+        bitmap = await createImageBitmap(sheet, sx, sy, cellW, cellH)
+        ctx.drawImage(bitmap, 0, 0, SPRITE_W, SPRITE_H)
+      } finally {
+        bitmap?.close()
+      }
+    } else {
+      ctx.drawImage(sheet, sx, sy, cellW, cellH, 0, 0, SPRITE_W, SPRITE_H)
+    }
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((b) => {
+        if (b) resolve(b)
+        else reject(new Error('failed to encode sprint frame'))
+      }, 'image/png')
+    })
+    const url = URL.createObjectURL(blob)
+    try {
+      out[i] = await loadImage(url)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  frames.sprint = out
+}
+
 export function loadPlayerSprites(): Promise<void> {
   if (loaded) return Promise.resolve()
   if (loadingPromise) return loadingPromise
 
   const all: Promise<void>[] = []
   for (const state of Object.keys(FRAME_COUNTS) as PlayerSpriteState[]) {
+    if (state === 'sprint') continue
     const n = FRAME_COUNTS[state]
     frames[state] = new Array(n)
     for (let i = 0; i < n; i++) {
@@ -92,6 +155,7 @@ export function loadPlayerSprites(): Promise<void> {
       all.push(p)
     }
   }
+  all.push(sliceSprintSheetIntoFrames())
 
   const timeout = new Promise<void>((resolve) => {
     setTimeout(() => {
