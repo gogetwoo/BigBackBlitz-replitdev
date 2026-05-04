@@ -44,7 +44,7 @@ export const DEFENDER_SPRITE_H = 192
 // How many frames each state has on disk.
 const FRAME_COUNTS: Record<DefenderSpriteState, number> = {
   idle: 1,
-  run: 3,
+  run: 8,
   tackle: 7,
 }
 
