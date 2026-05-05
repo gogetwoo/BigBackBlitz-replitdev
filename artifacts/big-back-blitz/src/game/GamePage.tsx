@@ -5537,6 +5537,7 @@ export function GamePage() {
     let activeIndex: number | null = null
     let prevDirs = { left: false, right: false, up: false, down: false }
     let prevButtons: boolean[] = []
+    let prevAnyAxisActive = false
     let raf = 0
 
     function showToast(text: string) {
@@ -5557,7 +5558,9 @@ export function GamePage() {
       if (!pads) return null
       if (activeIndex !== null) {
         const p = pads[activeIndex]
-        if (p && p.connected) return p
+        if (p && p.connected) {
+          return p
+        }
         // Only evict the saved index when the browser explicitly reports the
         // pad as present-but-disconnected. If the slot is still null, Chrome's
         // getGamepads() snapshot may not have propagated yet after a fresh
@@ -5568,12 +5571,24 @@ export function GamePage() {
           ACTIVE_GAMEPAD_INDEX = null
         }
       }
+      // Recover from stale indices (e.g. hot-reload / browser slot churn)
+      // by scanning all currently connected pads and picking the one with
+      // the richest state surface.
+      let best: Gamepad | null = null
+      let bestScore = -1
       for (const p of pads) {
         if (p && p.connected) {
-          activeIndex = p.index
-          ACTIVE_GAMEPAD_INDEX = p.index
-          return p
+          const score = (p.buttons?.length ?? 0) + (p.axes?.length ?? 0)
+          if (score > bestScore) {
+            best = p
+            bestScore = score
+          }
         }
+      }
+      if (best) {
+        activeIndex = best.index
+        ACTIVE_GAMEPAD_INDEX = best.index
+        return best
       }
       return null
     }
@@ -5619,9 +5634,34 @@ export function GamePage() {
     }
 
     const DEAD = 0.35
+    const BTN_THRESH = 0.55
     function btn(pad: Gamepad, i: number): boolean {
       const b = pad.buttons[i]
-      return !!b && b.pressed
+      return !!b && (b.pressed || b.value >= BTN_THRESH)
+    }
+
+    function hatDirs(axis: number | undefined): { up: boolean; down: boolean; left: boolean; right: boolean } {
+      if (axis === undefined || Number.isNaN(axis) || axis < -1.05 || axis > 1.05) {
+        return { up: false, down: false, left: false, right: false }
+      }
+      // Common HID hat mapping in browsers: values in [-1..1] stepping by 2/7.
+      // neutral=-1, up=-1, right~ -0.43, down~ 0.14, left~ 0.71 (diagonals between).
+      const sectors = [-1.0, -0.71, -0.43, -0.14, 0.14, 0.43, 0.71, 1.0]
+      let nearest = sectors[0]
+      let best = Infinity
+      for (const s of sectors) {
+        const d = Math.abs(axis - s)
+        if (d < best) { best = d; nearest = s }
+      }
+      if (best > 0.18) return { up: false, down: false, left: false, right: false }
+      if (nearest === -1.0) return { up: true, down: false, left: false, right: false }
+      if (nearest === -0.71) return { up: true, down: false, left: false, right: true }
+      if (nearest === -0.43) return { up: false, down: false, left: false, right: true }
+      if (nearest === -0.14) return { up: false, down: true, left: false, right: true }
+      if (nearest === 0.14)  return { up: false, down: true, left: false, right: false }
+      if (nearest === 0.43)  return { up: false, down: true, left: true, right: false }
+      if (nearest === 0.71)  return { up: false, down: false, left: true, right: false }
+      return { up: true, down: false, left: true, right: false }
     }
 
     function poll() {
@@ -5645,16 +5685,17 @@ export function GamePage() {
         const stickRight = ax >  DEAD
         const stickUp    = ay < -DEAD
         const stickDown  = ay >  DEAD
+        const hat = hatDirs(pad.axes[9])
 
         // Read d-pad button indices on every mapping. The standard
         // layout puts the d-pad at 12–15; many non-standard pads also
         // expose it there, and the task explicitly calls out keeping
         // d-pad working as the graceful fallback. Indices that don't
         // exist read as `false` via the guarded `btn()` helper.
-        const dpadUp    = btn(pad, 12)
-        const dpadDown  = btn(pad, 13)
-        const dpadLeft  = btn(pad, 14)
-        const dpadRight = btn(pad, 15)
+        const dpadUp    = btn(pad, 12) || hat.up
+        const dpadDown  = btn(pad, 13) || hat.down
+        const dpadLeft  = btn(pad, 14) || hat.left
+        const dpadRight = btn(pad, 15) || hat.right
 
         const dirLeft  = dpadLeft  || stickLeft
         const dirRight = dpadRight || stickRight
@@ -5683,6 +5724,12 @@ export function GamePage() {
         // Press-any-button-to-start. From menu / gameover, an edge on
         // any face button, Start, or a fresh directional push begins a
         // new run — mirroring the keyboard's "press any key to play".
+        const anyButtonNow = pad.buttons?.some((b) => !!b && (b.pressed || b.value >= BTN_THRESH)) ?? false
+        const prevAnyButton = prevButtons.some(Boolean)
+        const anyButtonEdge = anyButtonNow && !prevAnyButton
+        const anyAxisNow = Math.abs(ax) > DEAD || Math.abs(ay) > DEAD || dirLeft || dirRight || dirUp || dirDown
+        const anyAxisEdge = anyAxisNow && !prevAnyAxisActive
+
         const anyInputEdge =
           (btnA && !prevA) || (btnB && !prevB) ||
           (btnY && !prevY) ||
@@ -5690,7 +5737,8 @@ export function GamePage() {
           (dirLeft  && !prevDirs.left)  ||
           (dirRight && !prevDirs.right) ||
           (dirUp    && !prevDirs.up)    ||
-          (dirDown  && !prevDirs.down)
+          (dirDown  && !prevDirs.down)  ||
+          anyButtonEdge || anyAxisEdge
         if (anyInputEdge && showFocusHintRef.current) {
           showFocusHintRef.current = false
           setShowFocusHint(false)
@@ -5725,6 +5773,11 @@ export function GamePage() {
         prevButtons[0] = btnA; prevButtons[1] = btnB
         prevButtons[3] = btnY
         prevButtons[9] = btnStart
+        // Keep a full snapshot too so "any button" edges work on pads
+        // whose standard face-button indices aren't reported consistently.
+        prevButtons.length = pad.buttons.length
+        for (let bi = 0; bi < pad.buttons.length; bi++) prevButtons[bi] = btn(pad, bi)
+        prevAnyAxisActive = anyAxisNow
       }
       // Always reschedule — the loop must keep running even when no pad
       // is currently detected so it can pick up a controller that connects
@@ -5756,16 +5809,18 @@ export function GamePage() {
     window.addEventListener('gamepadconnected', onConnect)
     window.addEventListener('gamepaddisconnected', onDisconnect)
     window.addEventListener('focus', onWindowFocus)
+    window.addEventListener('pointerdown', dismissFocusHint, { passive: true })
     raf = requestAnimationFrame(poll)
     return () => {
       window.removeEventListener('gamepadconnected', onConnect)
       window.removeEventListener('gamepaddisconnected', onDisconnect)
       window.removeEventListener('focus', onWindowFocus)
+      window.removeEventListener('pointerdown', dismissFocusHint)
       cancelAnimationFrame(raf)
       GAMEPAD_CONNECTED = false
       ACTIVE_GAMEPAD_INDEX = null
     }
-  }, [togglePause, tryStartPlay])
+  }, [togglePause, tryStartPlay, dismissFocusHint])
 
   // Keyboard
   useEffect(() => {
